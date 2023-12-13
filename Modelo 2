@@ -1,0 +1,622 @@
+//#include <Wire.h>
+#include <Adafruit_PN532.h>
+#include <SoftwareSerial.h>
+#include <SPI.h>
+
+// Configuración del lector rfid con interfaz SPI
+#define SCK_PIN 13
+#define MOSI_PIN 11
+#define SS_PIN 10
+#define MISO_PIN 12
+Adafruit_PN532 rfid(SCK_PIN, MISO_PIN, MOSI_PIN, SS_PIN);
+
+SoftwareSerial BT(8, 7);
+
+char option;
+bool bluetoothConnected = false;
+bool showMenu = false;
+
+uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+uint8_t uidLength;
+
+uint8_t key[][6] = {
+  { 0x02, 0x12, 0x09, 0x19, 0x75, 0x91 },
+  { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
+  { 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5 },
+  { 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5 },
+  { 0x4d, 0x3a, 0x99, 0xc3, 0x51, 0xdd },
+  { 0x1a, 0x98, 0x2c, 0x7e, 0x45, 0x9a },
+  { 0xd3, 0xf7, 0xd3, 0xf7, 0xd3, 0xf7 },
+  { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff },
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+};
+
+uint8_t blockDataArray[][16] = {
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA },
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA },
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA },
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA }
+};
+
+// Array bidimensional para almacenar los datos de los bloques
+// uint8_t blockDataArray[16][4][16];
+
+
+void setup() {
+  BT.begin(9600);
+  Serial.begin(9600);
+
+  rfid.begin();
+  rfid.SAMConfig();
+
+  while (!bluetoothConnected) {
+    if (BT.available()) {
+      bluetoothConnected = true;
+      BT.println(F("Conexión establecida. Comenzando el programa."));
+      delay(2000);
+      showMenu = true;
+      displayMenu();
+    }
+  }
+}
+
+void loop() {
+  if (bluetoothConnected) {
+    if (BT.available()) {
+      char inputChar = BT.read();
+
+      if (isDigit(inputChar)) {
+        option = inputChar;
+        switch (option) {
+          case '1':
+            mostrarUID();
+            break;
+          case '2':
+            dumpInfoMifare1K();
+            break;
+          case '3':
+            dumpInfoMifare();
+            break;
+          case '4':
+            clonarSector();
+            break;
+          case '5':
+            modificarBloque();
+            break;
+          case '6':
+            clonarSector();
+            break;
+          default:
+            BT.println(F("Opción no válida"));
+        }
+
+        showMenu = true;
+        displayMenu();
+      }
+    }
+  }
+}
+
+void displayMenu() {
+  if (showMenu) {
+    BT.println(F("\n\n\n¡----------------------------------------------¡"));
+    BT.println(F("|  ___ ___ ___ ___     ___ _    ___  _  _ ___  |"));
+    BT.println(F("| | _ \\ __|_ _|   \\   / __| |  / _ \\| \\| | __| |"));
+    BT.println(F("| |   / _| | || |) | | (__| |_| (_) | .` | _|  |"));
+    BT.println(F("| |_|_\\_| |___|___/   \\___|____\\___/|_|\\_|___| |"));
+    BT.println(F("|----------------------------------------------|"));
+    BT.println(F("|    > Seleccione una opción:                  |"));
+    BT.println(F("|        1- Mostrar UID                        |"));
+    BT.println(F("|        2- Dump Tarjeta Mifare Classic 1k     |"));
+    BT.println(F("|        3- Dump Tarjeta Mifare ...            |"));
+    BT.println(F("|        4- Mostrar sector                     |"));
+    BT.println(F("|        5- Modificar bloque                   |"));
+    BT.println(F("|        6- Clonar sector                      |"));
+    BT.println(F("|        7- Copiar array                       |"));
+    BT.println(F("!----------------------------------------------!"));
+
+    showMenu = false;
+  }
+}
+
+void mostrarUID() {
+  rfid.begin();
+  // uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+  // uint8_t uidLength;
+
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    BT.println(F("¡----------------------------------------------¡"));
+    BT.println(F("|                 MOSTRAR UID                  |"));
+    BT.println(F("|----------------------------------------------|"));
+    BT.println(F("|   TARJETA DETECTADA                          |"));
+    // BT.print(F("|   - Tipo: ");
+    // BT.println(F("MIFARE                             |");
+    BT.print(F("|   - UID Length: "));
+    BT.print(uidLength, DEC);
+    BT.println(F(" bytes"));
+    BT.print(F("|   - UID: "));
+    for (byte i = 0; i < uidLength; i++) {
+      if (uid[i] < 0x10) {
+        BT.print(F(" 0"));
+      } else {
+        BT.print(F(" "));
+      }
+      BT.print(uid[i], HEX);
+    }
+
+    BT.println();
+    BT.println(F("!----------------------------------------------!"));
+
+    rfid.SAMConfig();
+    showMenu = true;
+
+  } else {
+  }
+}
+
+void dumpInfoMifare1K() {
+  rfid.begin();
+
+  // uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+  // uint8_t uidLength;
+
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    BT.println(F("      ¡----------------------------------------------¡"));
+    BT.println(F("      |               MOSTRAR CONTENIDO              |"));
+    BT.println(F("      !----------------------------------------------!"));
+    if (uidLength == 4) {
+      // Realizar la autenticación y lectura de bloques para los 16 sectores
+      for (byte sector = 0; sector < 16; sector++) {
+        BT.print(F("\nSector "));
+        BT.print(sector);
+        BT.println(F(":"));
+
+        for (byte k = 0; k < 9; k++) {
+          // Intentar la clave
+          if (try_key(key[k], sector)) {
+            // Encontrado e informado sobre la clave y el bloque,
+            // no es necesario probar otras claves para este sector
+            break;
+          }
+        }
+      }
+    } else {
+      BT.println(F("No es una tarjeta 1k (UUID length != 4 bytes)!"));
+    }
+    rfid.SAMConfig();
+    showMenu = true;
+  } else {
+    BT.println(F("No se detectó ninguna tarjeta"));
+  }
+}
+
+bool try_key(uint8_t keyA[], byte sector) {
+  bool result = false;
+  // uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+  // uint8_t uidLength;
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    if (rfid.mifareclassic_AuthenticateBlock(uid, uidLength, sector * 4, 0, keyA)) {
+      BT.println();
+      for (byte block = 0; block < 4; block++) {
+        uint8_t blockData[16];
+        if (rfid.mifareclassic_ReadDataBlock(sector * 4 + block, blockData)) {
+          BT.print(F("  Bloque "));
+          BT.print(block);
+          BT.print(F(": "));
+
+          for (byte i = 0; i < 16; i++) {
+            if (block == 3 && i < 6) {
+              // Si es el bloque 3, imprimir los primeros 6 bytes como clave
+              if (keyA[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(keyA[i], HEX);
+            } else {
+              if (blockData[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(blockData[i], HEX);
+            }
+          }
+          BT.println();
+        } else {
+          BT.println(F("  Error al leer el bloque "));
+        }
+      }
+      result = true;
+    } else {
+      result = false;
+    }
+  }
+  return result;
+}
+/*
+bool try_key(uint8_t keyA[], byte sector) {
+  bool result = false;
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    if (rfid.mifareclassic_AuthenticateBlock(uid, uidLength, sector * 4, 0, keyA)) {
+      BT.println();
+      for (byte block = 0; block < 4; block++) {
+        uint8_t blockData[16];
+        if (rfid.mifareclassic_ReadDataBlock(sector * 4 + block, blockData)) {
+          BT.print(F("  Bloque "));
+          BT.print(block);
+          BT.print(F(": "));
+
+          // Copiar datos del bloque al array bidimensional
+          for (byte i = 0; i < 16; i++) {
+            blockDataArray[sector][block][i] = blockData[i];
+            if (block == 3 && i < 6) {
+              if (keyA[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(keyA[i], HEX);
+            } else {
+              if (blockData[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(blockData[i], HEX);
+            }
+          }
+          BT.println();
+        } else {
+          BT.println(F("  Error al leer el bloque "));
+        }
+      }
+      result = true;
+    } else {
+      result = false;
+    }
+  }
+  return result;
+}*/
+
+void printData(byte *data, uint8_t length) {
+  for (byte i = 0; i < length; i++) {
+    BT.print(data[i] < 0x10 ? " 0" : " ");
+    BT.print(data[i], HEX);
+  }
+  BT.println();
+}
+
+void dumpInfoMifare() {
+  rfid.begin();
+  uint8_t success;
+  // uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
+  // uint8_t uidLength;
+
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    BT.println(F("      ¡----------------------------------------------¡"));
+    BT.println(F("      |               MOSTRAR CONTENIDO              |"));
+    BT.println(F("      !----------------------------------------------!"));
+    // Display some basic information about the card
+    BT.println(F("Tarjeta detectada"));
+    BT.print(F("  UID Tamaño: "));
+    BT.print(uidLength, DEC);
+    BT.println(F(" bytes"));
+    BT.print(F("  UID: "));
+    printData(uid, uidLength);
+    // rfid.PrintHex(uid, uidLength);
+    BT.println(F(""));
+
+    if (uidLength == 7) {
+      uint8_t data[32];
+
+      // We probably have an NTAG2xx card (though it could be Ultralight as well)
+      BT.println(F("Puede ser una tarjeta NTAG2xx (7 byte UID)"));
+
+      for (uint8_t i = 0; i < 42; i++) {
+        success = rfid.ntag2xx_ReadPage(i, data);
+
+        // Display the current page number
+        BT.print(F("PAGE "));
+        if (i < 10) {
+          BT.print(F("0"));
+          BT.print(i);
+        } else {
+          BT.print(i);
+        }
+        BT.print(F(": "));
+
+        // Display the results, depending on 'success'
+        if (success) {
+          // Dump the page data
+          printData(data, 4);
+        } else {
+          BT.println(F("Error al leer la PAGE!"));
+        }
+      }
+    } else {
+      BT.println(F("No es una tarjeta NTAG203 (UUID length != 7 bytes)!"));
+    }
+  } else {
+    BT.println(F("No se detectó ninguna tarjeta"));
+  }
+}
+
+bool try_key_modifiBloque(uint8_t key[], uint8_t sector, uint8_t block) {
+  bool result = false;
+  // uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+  // uint8_t uidLength;
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    // Autenticación para escribir en el sector
+    if (rfid.mifareclassic_AuthenticateBlock(uid, uidLength, sector * 4 + block, 0, key)) {
+      BT.println("Authenticated!");
+
+      // Solicitar al usuario que ingrese los datos para el bloque (16 bytes en formato hexadecimal)
+      BT.println("Enter 16 values (in hexadecimal) for the block:");
+
+      uint8_t data[16];
+      char input[3];
+
+      for (int i = 0; i < 16; ++i) {
+        BT.print(F("Enter value "));
+        BT.print(i + 1);
+        BT.print(F(": "));
+
+        while (!BT.available()) {}  // Esperar hasta que haya datos disponibles en el puerto serial
+        BT.readBytesUntil('\n', input, 3);
+        data[i] = strtol(input, NULL, 16);
+
+        BT.print(F("Value "));
+        BT.print(i + 1);
+        BT.print(F(": 0x"));
+        BT.println(data[i], HEX);
+
+        BT.print(F("Remaining values: "));
+        BT.println(16 - i - 1);
+      }
+      // Escribir datos en el bloque
+      if (rfid.mifareclassic_WriteDataBlock(sector * 4 + block, data)) {
+        BT.println("Data written successfully!");
+        result = true;
+      } else {
+        BT.println(F("Error writing data!"));
+      }
+    } else {
+      BT.println(F("Authentication failed."));
+      result = false;
+    }
+  }
+  return result;
+}
+
+void modificarBloque() {
+  rfid.begin();
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    BT.println(F("      ¡----------------------------------------------¡"));
+    BT.println(F("      |               MOSTRAR CONTENIDO              |"));
+    BT.println(F("      !----------------------------------------------!"));
+    if (uidLength == 4) {
+      BT.println(F("Found an NFC card!"));
+
+      // Solicitar al usuario que ingrese el sector y bloque que desea escribir
+      BT.println(F("Enter sector (0-15): "));
+      while (!BT.available()) {}
+      uint8_t sector = BT.parseInt();
+      BT.println(sector);
+      BT.println(F("Enter block (0-3): "));
+      while (!BT.available()) {}
+      uint8_t block = BT.parseInt();
+      BT.println(block);
+      for (byte k = 0; k < 9; k++) {
+        // Intentar la clave
+        if (try_key_modifiBloque(key[k], sector, block)) {
+          // Encontrado e informado sobre la clave y el bloque,
+          // no es necesario probar otras claves para este sector
+          break;
+        }
+      }
+
+
+    } else {
+      BT.println(F("No es una tarjeta 1k (UUID length != 4 bytes)!"));
+    }
+    rfid.SAMConfig();
+    showMenu = true;
+  } else {
+    BT.println(F("No se detectó ninguna tarjeta"));
+  }
+}
+
+bool copy_sector(uint8_t keyA[], byte sector) {
+  bool result = false;
+  // uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+  // uint8_t uidLength;
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    if (rfid.mifareclassic_AuthenticateBlock(uid, uidLength, sector * 4, 0, keyA)) {
+      BT.println();
+      for (byte block = 0; block < 4; block++) {
+        uint8_t blockData[16];
+        if (rfid.mifareclassic_ReadDataBlock(sector * 4 + block, blockData)) {
+          // Copy blockData to the provided array
+          for (byte i = 0; i < 16; i++) {
+            if (block == 3 && i < 6) {
+              // If it's the last block, copy keyA to the first 6 bytes
+              blockDataArray[block][i] = keyA[i];
+            } else {
+              // Otherwise, copy blockData as usual
+              blockDataArray[block][i] = blockData[i];
+            }
+          }
+          BT.print(F("  Bloque "));
+          BT.print(block);
+          BT.print(F(": "));
+
+          for (byte i = 0; i < 16; i++) {
+            if (block == 3 && i < 6) {
+              // Si es el bloque 3, imprimir los primeros 6 bytes como clave
+              if (keyA[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(keyA[i], HEX);
+            } else {
+              if (blockData[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(blockData[i], HEX);
+            }
+          }
+          BT.println();
+        } else {
+          BT.println(F("  Error al leer el bloque "));
+        }
+      }
+      result = true;
+    } else {
+      result = false;
+    }
+  }
+  return result;
+}
+
+bool paste_sector(uint8_t keyA[], byte sector) {
+  bool result = false;
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    if (rfid.mifareclassic_AuthenticateBlock(uid, uidLength, sector * 4, 0, keyA)) {
+      BT.println();
+      for (byte block = 0; block < 4; block++) {
+        uint8_t blockData[16];
+
+        // Copy the data from the array to blockData
+        for (byte i = 0; i < 16; i++) {
+          blockData[i] = blockDataArray[block][i];
+        }
+        // Write the data to the RFID card
+        if (rfid.mifareclassic_WriteDataBlock(sector * 4 + block, blockData)) {
+          BT.print(F("  Bloque "));
+          BT.print(block);
+          BT.print(F(": "));
+
+          for (byte i = 0; i < 16; i++) {
+            if (block == 3 && i < 6) {
+              // If it's the last block, print the first 6 bytes as the key
+              if (keyA[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(keyA[i], HEX);
+            } else {
+              if (blockData[i] < 0x10) {
+                BT.print(F(" 0"));
+              } else {
+                BT.print(F(" "));
+              }
+              BT.print(blockData[i], HEX);
+            }
+          }
+          BT.println();
+        } else {
+          BT.println(F("  Error al escribir en el bloque "));
+        }
+      }
+      result = true;
+    } else {
+      result = false;
+    }
+  }
+  return result;
+}
+
+
+
+void clonarSector() {
+  rfid.begin();
+
+  // uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
+  // uint8_t uidLength;
+
+  if (rfid.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    BT.println(F("      ¡----------------------------------------------¡"));
+    BT.println(F("      |               MOSTRAR CONTENIDO              |"));
+    BT.println(F("      !----------------------------------------------!"));
+    if (uidLength == 4) {
+      // Realizar la autenticación y lectura de bloques para el sector que se quiera
+      BT.println(F("Enter sector (0-15): "));
+      while (!BT.available()) {}
+      uint8_t sector = BT.parseInt();
+      BT.println(sector);
+      BT.print(F("\nSector "));
+      BT.print(sector);
+      BT.println(F(":"));
+
+      for (byte k = 0; k < 9; k++) {
+        // Intentar la clave
+        if (copy_sector(key[k], sector)) {
+          // Encontrado e informado sobre la clave y el bloque,
+          // no es necesario probar otras claves para este sector
+          break;
+        }
+      }
+      BT.print("Agregar nueva tarjeta ");
+      delay(5000);  // Delay for 5 seconds
+      // Display a counter on the screen during the delay
+      for (int i = 5; i > 0; i--) {
+        BT.print("Countdown: ");
+        BT.println(i);
+        delay(1000);  // Delay for 1 second
+      }
+      for (byte k = 0; k < 9; k++) {
+        // Intentar la clave
+        if (paste_sector(key[k], sector)) {
+          // Encontrado e informado sobre la clave y el bloque,
+          // no es necesario probar otras claves para este sector
+          break;
+        }
+      }
+
+    } else {
+      BT.println(F("No es una tarjeta 1k (UUID length != 4 bytes)!"));
+    }
+    rfid.SAMConfig();
+    showMenu = true;
+  } else {
+    BT.println(F("No se detectó ninguna tarjeta"));
+  }
+}
+
+/*
+void mostrarContenidoArray() {
+  BT.println(F("¡----------------------------------------------¡"));
+  BT.println(F("|       MOSTRAR CONTENIDO TOTAL DEL ARRAY      |"));
+  BT.println(F("|----------------------------------------------|"));
+
+  for (byte sector = 0; sector < 16; sector++) {
+    for (byte block = 0; block < 4; block++) {
+      BT.print(F("Sector "));
+      BT.print(sector);
+      BT.print(F(", Bloque "));
+      BT.print(block);
+      BT.println(F(":"));
+
+      for (byte i = 0; i < 16; i++) {
+        if (blockDataArray[sector][block][i] < 0x10) {
+          BT.print(F(" 0"));
+        } else {
+          BT.print(F(" "));
+        }
+        BT.print(blockDataArray[sector][block][i], HEX);
+
+        if ((i + 1) % 8 == 0) {
+          BT.println();
+        }
+      }
+      BT.println();
+    }
+  }
+
+  BT.println(F("!----------------------------------------------!"));
+}*/
