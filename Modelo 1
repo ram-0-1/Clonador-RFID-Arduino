@@ -1,0 +1,1095 @@
+#include <Adafruit_ILI9341.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+#define TFT_DC 8
+#define TFT_CS 7
+
+#define SS_PIN 10
+#define RST_PIN 9
+
+#define BTN_1 3
+#define BTN_2 4
+#define BTN_3 5
+#define BTN_4 6
+
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+//MFRC522::MIFARE_Key key;
+
+#define NR_KNOWN_KEYS 9
+// Claves conocidas
+byte knownKeys[NR_KNOWN_KEYS][MFRC522::MF_KEY_SIZE] = {
+  { 0x02, 0x12, 0x09, 0x19, 0x75, 0x91 },  // 02 12 09 19 75 91
+  { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },  // FF FF FF FF FF FF = predeterminado de fábrica
+  { 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5 },  // A0 A1 A2 A3 A4 A5
+  { 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5 },  // B0 B1 B2 B3 B4 B5
+  { 0x4d, 0x3a, 0x99, 0xc3, 0x51, 0xdd },  // 4D 3A 99 C3 51 DD
+  { 0x1a, 0x98, 0x2c, 0x7e, 0x45, 0x9a },  // 1A 98 2C 7E 45 9A
+  { 0xd3, 0xf7, 0xd3, 0xf7, 0xd3, 0xf7 },  // D3 F7 D3 F7 D3 F7
+  { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff },  // AA BB CC DD EE FF
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }   // 00 00 00 00 00 00
+};
+
+byte new_data[][16] = {
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA },
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA },
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA },
+  { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA }
+};
+
+byte keyOK[6] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
+
+
+byte nuidPICC[4];
+
+enum Estado {
+  WAIT,
+  MENU,
+  READUID,
+  DUMPINFO,
+  CLONEUID,
+  COPYUID,
+  PASTEUID,
+  MENUSECTOR,
+  INFOSECTOR,
+  WAITVOLVER,
+  DUPLICARSECTOR,
+  DUPLICADO
+};
+Estado estado = MENU;
+
+boolean IrMenu = false;
+boolean netxcard2 = false;
+int MenuOpcion = 0;  // Opción de menú actual
+int Pantalla = 0;
+int Tarjeta = 1;
+int Sector = 0;
+int Sector_clone = 0;
+int sector_num = 0;
+boolean volver = false;
+boolean clonar = false;
+
+
+byte firstCardUid[4];
+
+
+
+void setup() {
+  Serial.begin(115200);
+  SPI.begin();
+  tft.begin();
+  tft.setRotation(3);  // Ajusta la rotación según sea necesario
+  tft.fillScreen(ILI9341_BLACK);
+
+  rfid.PCD_Init();
+
+  /*for (byte i = 0; i < 6; i++) {
+    key.keyByte[i] = 0xFF;
+  }*/
+  pinMode(BTN_1, INPUT_PULLUP);
+  pinMode(BTN_2, INPUT_PULLUP);
+  pinMode(BTN_3, INPUT_PULLUP);
+  pinMode(BTN_4, INPUT_PULLUP);
+
+  displayMenu();  // Dibuja el menú principal al inicio
+}
+
+void loop() {
+  //  ACCIONES DE BOTONES
+  // Opción "BTN_1" seleccionada
+  if (digitalRead(BTN_1) == LOW) {
+    BTN_1_Accion();
+  }
+
+  // Opción "BTN_2" seleccionada
+  if (digitalRead(BTN_2) == LOW) {
+    BTN_2_Accion();
+  }
+
+  // Opción "BTN_3" seleccionada
+  if (digitalRead(BTN_3) == LOW) {
+    BTN_3_Accion();
+  }
+
+  // Opción "BTN_4" seleccionada
+  if (digitalRead(BTN_4) == LOW) {
+    BTN_4_Accion();
+  }
+
+  // ESTADOS DEL PROGRAMA
+  switch (estado) {
+    case MENU:
+      {
+        displayMenu();
+        break;
+      }
+    case WAIT:
+      {
+        if (!IrMenu) {
+          estado = WAIT;
+        } else {
+          estado = MENU;
+        }
+        break;
+      }
+    case READUID:
+      {
+        if (IrMenu) {
+          estado = WAIT;
+        } else {
+          readCard();
+        }
+        break;
+      }
+    case DUMPINFO:
+      {
+        if (IrMenu) {
+          estado = WAIT;
+        } else {
+          DumpInfoCardDefecto();
+        }
+        break;
+      }
+    case COPYUID:
+      {
+        if (IrMenu) {
+          estado = WAIT;
+        } else {
+          CopyUID_Block0();
+        }
+        break;
+      }
+    case PASTEUID:
+      {
+        if (IrMenu) {
+          estado = WAIT;
+        } else {
+          PasteUID_Block0();
+        }
+        break;
+      }
+    case MENUSECTOR:
+      {
+        if (IrMenu) {
+          estado = WAIT;
+        } else if (MenuOpcion == 2) {
+          menu_sectores();
+        } else if (MenuOpcion == 4) {
+          menu_sectores_clonar();
+        }
+        break;
+      }
+    case INFOSECTOR:
+      {
+        if (volver) {
+          estado = WAITVOLVER;
+        } else {
+          info_Sector(Sector);
+        }
+        break;
+      }
+    case DUPLICARSECTOR:
+      {
+        if (volver) {
+          estado = WAITVOLVER;
+        } else {
+          duplicar_Sector(Sector);
+        }
+        break;
+      }
+    case WAITVOLVER:
+      {
+        if (!volver) {
+          estado = WAITVOLVER;
+        } else {
+          estado = MENUSECTOR;
+        }
+
+        break;
+      }
+    case DUPLICADO:
+      {
+        if (!clonar) {
+          estado = WAITVOLVER;
+        } else {
+          modify_sector_data(Sector);
+        }
+        break;
+      }
+  }
+  //delay(100);
+}
+
+void displayMenu() {
+  tft.fillScreen(ILI9341_BLACK);  // Borra la pantalla
+  tft.setTextSize(3);
+  tft.setCursor(10, 10);
+  tft.setTextColor(ILI9341_RED);
+  tft.println("RFID TOOLS");
+  tft.setTextSize(2);
+  for (int i = 0; i < 5; i++) {
+    tft.setTextColor(ILI9341_WHITE);
+    if (i == MenuOpcion) {
+      tft.setTextColor(ILI9341_RED);
+      tft.fillRect(8, 37 + i * 20, 280, 20, ILI9341_YELLOW);  // Dibuja un fondo azul para el texto
+    }
+    tft.setCursor(10, 40 + i * 20);
+    if (i == 0) {
+      tft.println("1- READ UID");
+    } else if (i == 1) {
+      tft.println("2- DUMP TARJETA KEY(FF)");
+    } else if (i == 2) {
+      tft.println("3- DUMP SECTORES");
+    } else if (i == 3) {
+      tft.println("4- CHANGE UID");
+    } else if (i == 4) {
+      tft.println("5- DUPLICAR SECTOR");
+    }
+  }
+  estado = WAIT;
+  IrMenu = false;
+  Pantalla = 0;
+  rfid.PCD_Init();
+}
+void WaitingForTarjeta() {
+  tft.fillScreen(ILI9341_BLACK);
+
+  if (MenuOpcion == 0 || MenuOpcion == 1 || MenuOpcion == 2 || MenuOpcion == 4) {
+    tft.setTextSize(2);
+    tft.setTextColor(ILI9341_BLUE);
+    tft.setCursor(10, 10);
+    tft.println("Esperando tarjeta...");
+  }
+  if (MenuOpcion == 0) {
+    Pantalla = 1;
+  } else if (MenuOpcion == 1) {
+    Pantalla = 2;
+    tft.setTextSize(1);
+    tft.setTextColor(ILI9341_ORANGE);
+    tft.println("(PARA VER EL CONTENIDO, CONECTAR USB)");
+    tft.println();
+
+  } else if (MenuOpcion == 3) {
+    tft.setTextSize(1);
+    tft.setCursor(10, 10);
+    tft.setTextColor(ILI9341_ORANGE);
+    tft.println("- ESPERANDO TARJETA UID CLONE...");
+  }
+
+
+  //delay(1000);
+}
+// Código para la opción 1:
+void readCard() {
+  Pantalla = 1;
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    tft.fillScreen(ILI9341_BLACK);
+    MFRC522::PICC_Type piccType = rfid.PICC_GetType(rfid.uid.sak);
+    tft.setTextSize(3);
+    tft.setCursor(10, 10);
+    tft.setTextColor(ILI9341_GREEN);
+    tft.println("TARJETA DETECTADA");
+    tft.setTextSize(2);
+    tft.setCursor(10, 50);
+    tft.setTextColor(ILI9341_YELLOW);
+    //tft.print("- Tipo: " + String(rfid.PICC_GetTypeName(piccType)));
+    tft.print("- Tipo: ");
+    tft.println(String(rfid.PICC_GetTypeName(piccType)));
+    tft.setCursor(10, 90);
+    tft.setTextColor(ILI9341_RED);
+    tft.print("- UID: ");
+    for (byte i = 0; i < rfid.uid.size; i++) {
+      if (rfid.uid.uidByte[i] < 0x10) {
+        tft.print(" 0");
+      } else {
+        tft.print(" ");
+      }
+      tft.print(rfid.uid.uidByte[i], HEX);
+    }
+    estado = WAIT;
+    //IrMenu = false;
+    rfid.PCD_Init();
+  } else {
+    estado = READUID;
+  }
+}
+// Código para la opción 2:
+void DumpInfoCardDefecto() {
+  Pantalla = 2;
+  // Volcado de sectores y bloques
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    // Usar la clave por defecto para autenticar la tarjeta
+    MFRC522::MIFARE_Key defaultKey;
+    for (byte i = 0; i < 6; i++) {
+      defaultKey.keyByte[i] = 0xFF;
+    }
+    tft.setTextSize(1);
+    tft.println("RESUMEN DEL DUMP");
+    tft.println();
+
+    // Recorremos las secciones de bloques
+    for (int section = 0; section < 16; section++) {
+      Serial.print("----------------- Seccion " + String(section) + " ----------------\n");
+      bool sectionOk = true;  // Variable para verificar si todos los bloques en la sección fueron leídos correctamente
+      // Ajustar la posición en la pantalla para la segunda lista
+      int xPos = (section < 8) ? 20 : 160;                                     // Ajusta según el ancho de tu pantalla TFT
+      int yPos = (section < 8) ? section * 20 + 60 : (section - 8) * 20 + 60;  // Ajusta según el tamaño de tu fuente y el espaciado deseado
+      // Recorremos los bloques de la sección
+      for (int block = section * 4; block < section * 4 + 4; block++) {
+        byte buffer[18];
+        byte size = sizeof(buffer);
+        // Autenticar la tarjeta con la clave por defecto antes de leer el bloque
+        if (rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block, &defaultKey, &(rfid.uid)) != MFRC522::STATUS_OK) {
+          Serial.print("Error de autenticación en el bloque ");
+          Serial.println(block);
+          sectionOk = false;
+          break;  // No necesitas continuar si hay un error de autenticación
+        }
+        // Leer el bloque de memoria
+        if (rfid.MIFARE_Read(block, buffer, &size) != MFRC522::STATUS_OK) {
+          Serial.print("Error de lectura en el bloque ");
+          Serial.println(block);
+          sectionOk = false;
+          break;  // No necesitas continuar si hay un error de lectura
+        }
+        // Mostrar el contenido del bloque
+        for (byte i = 0; i < 16; i++) {
+          if (buffer[i] < 0x10) {
+            Serial.print(" 0");
+          } else {
+            Serial.print(" ");
+          }
+          Serial.print(buffer[i], HEX);
+        }
+        Serial.println();
+      }
+      // Mostrar el estado de la sección (OK o ERROR) en la pantalla TFT
+      tft.setCursor(10, 10);
+
+      tft.setTextColor(ILI9341_GREEN);
+      tft.setCursor(xPos, yPos);
+      tft.print("SECCION ");
+      tft.setTextColor(ILI9341_ORANGE);
+      tft.print(section);
+      tft.print(": ");
+      if (sectionOk) {
+        tft.setTextColor(ILI9341_GREEN);
+        tft.println("OK");
+      } else {
+        tft.setTextColor(ILI9341_RED);
+        tft.println("ERROR");
+      }
+      tft.setCursor(xPos - 7, yPos + 10);
+      tft.setTextColor(ILI9341_BLUE);
+      tft.println("------------------");
+    }
+
+    estado = WAIT;
+    rfid.PCD_Init();
+  } else {
+    estado = DUMPINFO;
+  }
+}
+// Rutina auxiliar para volcar una matriz de bytes como valores hexadecimales en Serie.
+void dump_byte_array(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    tft.print(buffer[i] < 0x10 ? " 0" : " ");
+    tft.print(buffer[i], HEX);
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], HEX);
+  }
+  tft.println();
+  Serial.println();
+}
+void dump_byte_array_SERIAL(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], HEX);
+  }
+  Serial.println();
+}
+void dump_byte_array_bloque0(byte *buffer, byte bufferSize) {
+  for (byte i = 4; i < bufferSize; i++) {
+    tft.print(buffer[i] < 0x10 ? " 0" : " ");
+    tft.print(buffer[i], HEX);
+  }
+  tft.println();
+}
+
+// FUERZA BRUTA DE KEY PARA PODER LEER/ESCRIBIR UN SECTOR
+bool try_key(MFRC522::MIFARE_Key *key, byte sector, byte block) {
+  bool result = false;
+
+  if (estado == COPYUID) {
+    byte buffer[18];
+    MFRC522::StatusCode status;
+    status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block, key, &(rfid.uid));
+
+    if (status != MFRC522::STATUS_OK) {
+      return false;
+    }
+
+    byte byteCount = sizeof(buffer);
+    status = rfid.MIFARE_Read(block, buffer, &byteCount);
+
+    if (status != MFRC522::STATUS_OK) {
+      Serial.print(F("MIFARE_Read() fallo: "));
+    } else {
+      result = true;
+      tft.setTextColor(ILI9341_YELLOW);
+      tft.println("-- FUERZA BRUTA --");
+      tft.setTextColor(ILI9341_GREEN);
+      tft.println();
+      tft.print("CLAVE BLOQUE ");
+      Serial.print("CLAVE BLOQUE ");
+      Serial.print(block);
+
+
+      tft.setTextColor(ILI9341_RED);
+      dump_byte_array((*key).keyByte, MFRC522::MF_KEY_SIZE);
+      // Volcar datos del bloque
+      tft.setTextColor(ILI9341_GREEN);
+      tft.println();
+      tft.print("RESTO BLOQUE ");
+      tft.print(block);
+      tft.print(":");
+      tft.setTextColor(ILI9341_RED);
+      dump_byte_array_bloque0(buffer, 16);
+      Serial.print("RESTO BLOQUE ");
+      Serial.print(block);
+      Serial.print(":");
+    }
+  } else if (estado == INFOSECTOR) {
+    byte buffer[18];
+    MFRC522::StatusCode status;
+    // Calcular el bloque base en función del sector
+    byte baseBlock = sector * 4;
+    for (int i = 0; i < 4; i++) {
+      // Autenticar con la clave en el bloque correspondiente
+      status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, baseBlock + i, key, &(rfid.uid));
+      if (status != MFRC522::STATUS_OK) {
+        Serial.print(F("Autenticación fallida en el bloque "));
+        Serial.println(baseBlock + i);
+        continue;  // Saltar al siguiente bloque si la autenticación falla
+      }
+      byte byteCount = sizeof(buffer);
+      status = rfid.MIFARE_Read(baseBlock + i, buffer, &byteCount);
+      if (status != MFRC522::STATUS_OK) {
+        Serial.print(F("MIFARE_Read() fallo en el bloque "));
+        Serial.println(baseBlock + i);
+      } else {
+        // Mostrar información del bloque
+        result = true;
+        if (i == 0) {
+          tft.println();
+          tft.setTextColor(ILI9341_GREEN);
+          tft.println();
+          tft.print("--------  SECTOR ");
+          tft.print(sector);
+          tft.println("  --------");
+          tft.println();
+          tft.print("KEY: ");
+          tft.setTextColor(ILI9341_RED);
+          dump_byte_array((*key).keyByte, MFRC522::MF_KEY_SIZE);
+        }
+        // Volcar datos del bloque
+        tft.setTextColor(ILI9341_GREEN);
+        tft.println();
+        tft.print("BLOQUE ");
+        tft.print(baseBlock + i);
+        tft.print(":");
+        tft.setTextColor(ILI9341_RED);
+        tft.println();
+        tft.println();
+        if (i == 3) {
+          // Si es el último bloque, copiar la clave en los primeros 6 bytes
+          for (int j = 0; j < 6; j++) {
+            buffer[j] = (*key).keyByte[j];
+          }
+        }
+        dump_byte_array(buffer, 16);
+      }
+    }
+  }
+  rfid.PICC_HaltA();
+  rfid.PCD_Init();
+
+  return result;
+}
+bool try_key_clone(MFRC522::MIFARE_Key *key, byte sector, byte block) {
+  bool result = false;
+  if (estado == DUPLICARSECTOR) {
+    byte buffer[18];
+    MFRC522::StatusCode status;
+    // Calcular el bloque base en función del sector
+    byte baseBlock = sector * 4;
+    for (int i = 0; i < 4; i++) {
+      // Autenticar con la clave en el bloque correspondiente
+      status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, baseBlock + i, key, &(rfid.uid));
+      if (status != MFRC522::STATUS_OK) {
+        Serial.print(F("Autenticación fallida en bloque "));
+        Serial.println(baseBlock + i);
+        Serial.print("Con KEY: ");
+        dump_byte_array_SERIAL((*key).keyByte, MFRC522::MF_KEY_SIZE);
+        continue;  // Saltar al siguiente bloque si la autenticación falla
+      }
+      byte byteCount = sizeof(buffer);
+      status = rfid.MIFARE_Read(baseBlock + i, buffer, &byteCount);
+      if (status != MFRC522::STATUS_OK) {
+        Serial.print(F("MIFARE_Read() fallo en el bloque "));
+        Serial.println(baseBlock + i);
+      } else {
+        // Mostrar información del bloque
+        result = true;
+        if (i == 0) {
+          tft.setTextColor(ILI9341_GREEN);
+          tft.println();
+          tft.print("--------  SECTOR ");
+          tft.print(sector);
+          tft.println("  --------");
+          tft.println();
+          tft.print("KEY: ");
+          tft.setTextColor(ILI9341_RED);
+          dump_byte_array((*key).keyByte, MFRC522::MF_KEY_SIZE);
+        }
+
+        // Copiar los datos del bloque al array new_data
+        for (int j = 0; j < 16; j++) {
+          if (i == 3 && j < 6) {
+            // Si estamos en la fila 3 y en las posiciones 0 a 5,
+            // copiar el valor de la clave en lugar de los datos del bloque
+            new_data[i][j] = (*key).keyByte[j];
+          } else {
+            // En otros casos, copiar los datos del bloque
+            new_data[i][j] = buffer[j];
+          }
+        }
+      }
+    }
+    if (status == MFRC522::STATUS_OK) {
+      // Imprimir los datos del array new_data
+      tft.println();
+      tft.setTextColor(ILI9341_PURPLE);
+
+      tft.println("DATOS DEL ARRAY new_data:");
+      for (int i = 0; i < 4; i++) {
+        tft.println();
+        tft.setTextColor(ILI9341_GREEN);
+        tft.print("BLOQUE ");
+        tft.print(baseBlock + i);
+        tft.print(":");
+        tft.setTextColor(ILI9341_RED);
+        tft.println();
+        tft.println();
+        Serial.println();
+        Serial.print("BLOQUE ");
+        Serial.print(baseBlock + i);
+        Serial.print(":");
+        Serial.println();
+        Serial.println();
+        dump_byte_array(new_data[i], 16);
+      }
+    }
+  } else if (estado == DUPLICADO) {
+    byte buffer[18];
+    for (int i = 0; i < 4; i++) {
+      byte baseBlock = sector * 4;
+      byte trailerBlock = baseBlock + 3;
+      MFRC522::StatusCode status;
+      // Autenticar con la clave en el bloque correspondiente
+      status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, baseBlock + i, key, &(rfid.uid));
+      if (status != MFRC522::STATUS_OK) {
+        Serial.print(F("Autenticación fallida en bloque "));
+        Serial.println(sector);
+        Serial.print("Con KEY: ");
+        dump_byte_array_SERIAL((*key).keyByte, MFRC522::MF_KEY_SIZE);
+        continue;  // Saltar al siguiente bloque si la autenticación falla
+      }
+      byte byteCount = sizeof(buffer);
+      status = rfid.MIFARE_Read(baseBlock + i, buffer, &byteCount);
+      if (status != MFRC522::STATUS_OK) {
+        Serial.print(F("MIFARE_Read() fallo en el bloque "));
+        Serial.println(sector);
+      } else {
+        // Mostrar información del bloque
+        result = true;
+        if (i == 0) {
+          tft.setTextSize(1);
+          tft.fillScreen(ILI9341_BLACK);  // Borra la pantalla
+          tft.setTextColor(ILI9341_GREEN);
+          tft.println();
+          tft.print("--------  SECTOR ");
+          tft.print(sector);
+          tft.println("  --------");
+          tft.println();
+          tft.print("KEY: ");
+          tft.setTextColor(ILI9341_RED);
+          dump_byte_array((*key).keyByte, MFRC522::MF_KEY_SIZE);
+          // Modify data in all blocks of the sector
+          for (int i = 0; i < 4; i++) {
+            tft.println();
+            Serial.println();
+            tft.setTextColor(ILI9341_ORANGE);
+            tft.print(F("WRITING BLOCK "));
+            tft.print(baseBlock + i);
+            tft.println(F(" ..."));
+            Serial.print(F("WRITING BLOCK "));
+            Serial.print(baseBlock + i);
+            Serial.println(F(" ..."));
+            tft.println();
+            tft.setTextColor(ILI9341_GREEN);
+            dump_byte_array(new_data[i], 16);
+            status = (MFRC522::StatusCode)rfid.MIFARE_Write(baseBlock + i, new_data[i], 16);
+            if (status != MFRC522::STATUS_OK) {
+              tft.println();
+              tft.setTextColor(ILI9341_RED);
+              tft.print(F("WRITE FAILED: "));
+              tft.println(rfid.GetStatusCodeName(status));
+              Serial.print(F("WRITE FAILED: "));
+              Serial.println(rfid.GetStatusCodeName(status));
+            }
+          }
+        }
+      }
+    }
+  }
+
+
+  rfid.PICC_HaltA();
+  rfid.PCD_Init();
+  return result;
+}
+// Código para la opción 3:
+void menu_sectores() {
+  Pantalla = 3;
+  volver = false;
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+
+    tft.fillScreen(ILI9341_BLACK);  // Borra la pantalla
+    tft.setTextSize(2);
+    tft.setCursor(85, 10);
+    tft.setTextColor(ILI9341_ORANGE);
+    tft.println("DUMP INFO");
+    tft.setTextColor(ILI9341_PURPLE);
+    tft.setCursor(50, 30);
+    tft.println("SELECCIONA SECTOR");
+    tft.setTextSize(2);
+    for (int i = 0; i < 16; i++) {
+      tft.setTextColor(ILI9341_GREEN);
+      if (i == Sector) {
+        tft.setTextColor(ILI9341_RED);
+        //tft.fillRect(38, 37 + i * 20, 115, 20, ILI9341_YELLOW);  // Dibuja un fondo azul para el texto
+      }
+      tft.setCursor(40, 60 + i * 20);
+      if (i == 0) {
+        tft.println("SECTOR 0");
+      } else if (i == 1) {
+        tft.println("SECTOR 1");
+      } else if (i == 2) {
+        tft.println("SECTOR 2");
+      } else if (i == 3) {
+        tft.println("SECTOR 3");
+      } else if (i == 4) {
+        tft.println("SECTOR 4");
+      } else if (i == 5) {
+        tft.println("SECTOR 5");
+      } else if (i == 6) {
+        tft.println("SECTOR 6");
+      } else if (i == 7) {
+        tft.println("SECTOR 7");
+      }
+
+      tft.setCursor(160, 60 + (i - 8) * 20);
+
+      if (i == 8) {
+        tft.println("SECTOR 8");
+      } else if (i == 9) {
+        tft.println("SECTOR 9");
+      } else if (i == 10) {
+        tft.println("SECTOR 10");
+      } else if (i == 11) {
+        tft.println("SECTOR 11");
+      } else if (i == 12) {
+        tft.println("SECTOR 12");
+      } else if (i == 13) {
+        tft.println("SECTOR 13");
+      } else if (i == 14) {
+        tft.println("SECTOR 14");
+      } else if (i == 15) {
+        tft.println("SECTOR 15");
+      }
+    }
+    estado = WAIT;
+    IrMenu = false;
+    rfid.PCD_Init();
+  } else {
+    estado = MENUSECTOR;
+  }
+}
+void menu_sectores_clonar() {
+  Pantalla = 5;
+  volver = false;
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+
+    tft.fillScreen(ILI9341_BLACK);  // Borra la pantalla
+    tft.setTextSize(2);
+    tft.setCursor(85, 10);
+    tft.setTextColor(ILI9341_ORANGE);
+    tft.println("CLONE INFO");
+    tft.setTextColor(ILI9341_PURPLE);
+    tft.setCursor(50, 30);
+    tft.println("SELECCIONA SECTOR");
+    tft.setTextSize(2);
+    for (int i = 0; i < 16; i++) {
+      tft.setTextColor(ILI9341_GREEN);
+      if (i == Sector) {
+        tft.setTextColor(ILI9341_RED);
+        //tft.fillRect(38, 37 + i * 20, 115, 20, ILI9341_YELLOW);  // Dibuja un fondo azul para el texto
+      }
+      tft.setCursor(40, 60 + i * 20);
+      if (i == 0) {
+        tft.println("SECTOR 0");
+      } else if (i == 1) {
+        tft.println("SECTOR 1");
+      } else if (i == 2) {
+        tft.println("SECTOR 2");
+      } else if (i == 3) {
+        tft.println("SECTOR 3");
+      } else if (i == 4) {
+        tft.println("SECTOR 4");
+      } else if (i == 5) {
+        tft.println("SECTOR 5");
+      } else if (i == 6) {
+        tft.println("SECTOR 6");
+      } else if (i == 7) {
+        tft.println("SECTOR 7");
+      }
+
+      tft.setCursor(160, 60 + (i - 8) * 20);
+
+      if (i == 8) {
+        tft.println("SECTOR 8");
+      } else if (i == 9) {
+        tft.println("SECTOR 9");
+      } else if (i == 10) {
+        tft.println("SECTOR 10");
+      } else if (i == 11) {
+        tft.println("SECTOR 11");
+      } else if (i == 12) {
+        tft.println("SECTOR 12");
+      } else if (i == 13) {
+        tft.println("SECTOR 13");
+      } else if (i == 14) {
+        tft.println("SECTOR 14");
+      } else if (i == 15) {
+        tft.println("SECTOR 15");
+      }
+    }
+    estado = WAIT;
+    IrMenu = false;
+    rfid.PCD_Init();
+  } else {
+    estado = MENUSECTOR;
+  }
+}
+void info_Sector(byte sector) {
+  Pantalla = 13;
+  // Esperar hasta que la primera tarjeta esté presente
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    tft.fillScreen(ILI9341_BLACK);  // Borra la pantalla
+    tft.setTextSize(1);
+    tft.setCursor(10, 10);
+    tft.setTextColor(ILI9341_BLUE);
+    tft.println();
+    tft.println("+ TARJETA DETECTADA");
+    tft.setTextColor(ILI9341_ORANGE);
+    tft.println();
+    tft.println("-- FUERZA BRUTA --");
+    // Intentar las claves predeterminadas conocidas
+    MFRC522::MIFARE_Key key;
+    for (byte k = 0; k < 9; k++) {
+      // Copiar la clave conocida en la estructura MIFARE_Key
+      for (byte i = 0; i < MFRC522::MF_KEY_SIZE; i++) {
+        key.keyByte[i] = knownKeys[k][i];
+      }
+      // Intentar la clave
+      if (try_key(&key, sector, 0)) {
+        // Encontrado e informado sobre la clave y el bloque,
+        // no es necesario probar otras claves para esta PICC
+        break;
+      }
+      if (!rfid.PICC_IsNewCardPresent())
+        break;
+      if (!rfid.PICC_ReadCardSerial())
+        break;
+    }
+    // Detener el PICC para evitar confusiones
+    rfid.PICC_HaltA();
+    volver = false;
+    IrMenu = false;
+
+    // Llamar a la función PasteUID
+    estado = WAITVOLVER;
+    rfid.PCD_Init();
+  } else {
+    estado = MENUSECTOR;
+  }
+}
+void duplicar_Sector(byte sector) {
+  Pantalla = 15;
+  // Esperar hasta que la primera tarjeta esté presente
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    tft.fillScreen(ILI9341_BLACK);  // Borra la pantalla
+    tft.setTextSize(1);
+    tft.setCursor(10, 10);
+    tft.setTextColor(ILI9341_BLUE);
+    tft.println();
+    tft.println("+ TARJETA DETECTADA PARA CLONADO");
+    tft.setTextColor(ILI9341_ORANGE);
+    tft.println();
+    tft.println("-- FUERZA BRUTA --");
+    // Intentar las claves predeterminadas conocidas
+    MFRC522::MIFARE_Key key;
+    for (byte k = 0; k < 9; k++) {
+      // Copiar la clave conocida en la estructura MIFARE_Key
+      for (byte i = 0; i < MFRC522::MF_KEY_SIZE; i++) {
+        key.keyByte[i] = knownKeys[k][i];
+      }
+      // Intentar la clave
+      if (try_key_clone(&key, sector, 0)) {
+        // Encontrado e informado sobre la clave y el bloque,
+        // no es necesario probar otras claves para esta PICC
+        break;
+      }
+      if (!rfid.PICC_IsNewCardPresent())
+        break;
+      if (!rfid.PICC_ReadCardSerial())
+        break;
+    }
+    // Detener el PICC para evitar confusiones
+    rfid.PICC_HaltA();
+    volver = false;
+    IrMenu = false;
+
+    tft.setTextSize(2);
+    tft.setCursor(5, 10);
+    tft.setTextColor(ILI9341_BLACK);
+    tft.fillRect(0, 7, 350, 23, ILI9341_BLUE);  // Dibuja un fondo azul para el texto
+    tft.print("ACERCA TARJETA, BTN-ACCION");
+
+    // Llamar a la función PasteUID
+    estado = WAITVOLVER;
+    rfid.PCD_Init();
+  } else {
+    estado = MENUSECTOR;
+  }
+}
+void modify_sector_data(byte sector) {
+  Pantalla = 14;
+
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    MFRC522::StatusCode status;
+    // Intentar las claves predeterminadas conocidas
+    MFRC522::MIFARE_Key key;
+    for (byte k = 0; k < 9; k++) {
+      // Copiar la clave conocida en la estructura MIFARE_Key
+      for (byte i = 0; i < MFRC522::MF_KEY_SIZE; i++) {
+        key.keyByte[i] = knownKeys[k][i];
+      }
+      // Intentar la clave
+      if (try_key_clone(&key, sector, 0)) {
+        // Encontrado e informado sobre la clave y el bloque,
+        // no es necesario probar otras claves para esta PICC
+        break;
+      }
+      if (!rfid.PICC_IsNewCardPresent())
+        break;
+      if (!rfid.PICC_ReadCardSerial())
+        break;
+    }
+
+
+    // Halt PICC
+    // Stop encryption on PCD
+    rfid.PICC_HaltA();
+    volver = false;
+    IrMenu = false;
+    clonar = false;
+    rfid.PCD_StopCrypto1();
+    // Llamar a la función PasteUID
+    estado = DUPLICADO;
+    rfid.PCD_Init();
+  } else {
+    estado = MENUSECTOR;
+  }
+}
+// Código para la opción 4:
+void CopyUID_Block0() {
+  Pantalla = 4;
+  Tarjeta = 1;
+
+  // Esperar hasta que la primera tarjeta esté presente
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    tft.setTextColor(ILI9341_BLUE);
+    tft.println();
+    tft.println("+ PRIMERA TARJETA DETECTADA");
+
+    // Leer el UID de la primera tarjeta
+    for (byte i = 0; i < 4; i++) {
+      firstCardUid[i] = rfid.uid.uidByte[i];
+    }
+    tft.setTextColor(ILI9341_GREEN);
+    tft.println();
+    tft.print("+ UID COPIADO: ");
+    tft.setTextColor(ILI9341_RED);
+    dump_byte_array(firstCardUid, 4);
+    tft.println();
+    // Intentar las claves predeterminadas conocidas
+    MFRC522::MIFARE_Key key;
+    for (byte k = 0; k < 9; k++) {
+      // Copiar la clave conocida en la estructura MIFARE_Key
+      for (byte i = 0; i < MFRC522::MF_KEY_SIZE; i++) {
+        key.keyByte[i] = knownKeys[k][i];
+      }
+      // Intentar la clave
+      if (try_key(&key, 0, 0)) {
+        // Encontrado e informado sobre la clave y el bloque,
+        // no es necesario probar otras claves para esta PICC
+        break;
+      }
+      if (!rfid.PICC_IsNewCardPresent())
+        break;
+      if (!rfid.PICC_ReadCardSerial())
+        break;
+    }
+    // Detener el PICC para evitar confusiones
+    rfid.PICC_HaltA();
+    // Llamar a la función PasteUID
+    estado = WAIT;
+    rfid.PCD_Init();
+    Tarjeta = 2;
+    tft.setTextSize(1);
+    tft.setTextColor(ILI9341_ORANGE);
+    tft.println();
+    tft.println("- PRESIONA ACCION PARA ESCRIBIR MAGIC UID...");
+  } else {
+    estado = COPYUID;
+  }
+}
+void PasteUID_Block0() {
+  Pantalla = 4;
+  // Esperar hasta que la segunda tarjeta esté presente
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    tft.setTextColor(ILI9341_BLUE);
+    tft.println();
+    tft.println("+ SEGUNDA TARJETA DETECTADA");
+    // Leer el UID de la segunda tarjeta
+    byte secondCardUid[4];
+    tft.println();
+    tft.setTextColor(ILI9341_GREEN);
+    tft.print("+ UID TARJETA: ");
+    tft.setTextColor(ILI9341_RED);
+    for (byte i = 0; i < 4; i++) {
+      secondCardUid[i] = rfid.uid.uidByte[i];
+      tft.print(secondCardUid[i] < 0x10 ? " 0" : " ");
+      tft.print(secondCardUid[i], HEX);
+    }
+    tft.println();
+
+    // Escribir el UID de la primera tarjeta en la segunda tarjeta
+    if (rfid.MIFARE_SetUid(firstCardUid, 4, true)) {
+      tft.println();
+      tft.setTextColor(ILI9341_GREEN);
+      tft.println("+ UID CLONADO");
+      tft.println();
+      tft.setTextColor(ILI9341_GREEN);
+      tft.print("+ UID ACTUAL: ");
+      dump_byte_array(firstCardUid, 4);
+    } else {
+      tft.setTextColor(ILI9341_RED);
+      tft.println();
+      tft.println("- ERROR AL COPIAR UID");
+      tft.println();
+      tft.println("- ASEGURATE DE USAR UNA TARJETA MAGIC");
+    }
+    // Detener el PICC para evitar confusiones
+    rfid.PICC_HaltA();
+    estado = WAIT;
+    rfid.PCD_Init();
+    Tarjeta = 1;
+  } else {
+    estado = PASTEUID;
+  }
+}
+
+
+
+void BTN_2_Accion() {
+  if (Pantalla == 0) {
+    MenuOpcion = (MenuOpcion + 1) % 5;
+    estado = MENU;
+  } else if (Pantalla == 3) {
+    Sector = (Sector + 1) % 16;
+    estado = MENUSECTOR;
+  } else if (Pantalla == 5) {
+    Sector = (Sector + 1) % 16;
+    estado = MENUSECTOR;
+  }
+}
+void BTN_1_Accion() {
+  if (Pantalla == 0) {
+    MenuOpcion = (MenuOpcion - 1 + 5) % 5;
+    estado = MENU;
+  } else if (Pantalla == 3) {
+    Sector = (Sector - 1 + 16) % 16;
+    estado = MENUSECTOR;
+  } else if (Pantalla == 5) {
+    Sector = (Sector - 1 + 16) % 16;
+    estado = MENUSECTOR;
+  }
+}
+void BTN_3_Accion() {
+  if (Pantalla == 0) {
+    if (MenuOpcion == 0) {
+      // Opción "1- Dump Tarjeta"
+      WaitingForTarjeta();
+      estado = READUID;
+    } else if (MenuOpcion == 1) {
+      // Opción "2- Dump Tarjeta"
+      WaitingForTarjeta();
+      estado = DUMPINFO;
+    } else if (MenuOpcion == 2) {
+      // Opción "3- Dump tarjeta por sectores"
+      WaitingForTarjeta();
+      estado = MENUSECTOR;
+    } else if (MenuOpcion == 3) {
+      // Opción "4- Clone UID"
+      WaitingForTarjeta();
+      estado = COPYUID;
+    } else if (MenuOpcion == 4) {
+      // Opción "5- Duplicado sector"
+      WaitingForTarjeta();
+      estado = MENUSECTOR;
+    }
+  } else if (Pantalla == 3) {
+    estado = INFOSECTOR;
+  } else if (Pantalla == 4) {
+    estado = PASTEUID;
+  } else if (Pantalla == 5) {
+    estado = DUPLICARSECTOR;
+  } else if (Pantalla == 15) {
+    estado = DUPLICADO;
+    clonar = true;
+  }
+}
+void BTN_4_Accion() {
+  if (Pantalla == 0) {
+    // NONE
+  } else if (Pantalla == 1 || Pantalla == 2 || Pantalla == 3 || Pantalla == 4 || Pantalla == 5) {
+    IrMenu = true;
+  } else if (Pantalla == 13 || Pantalla == 14 || Pantalla == 15) {
+    volver = true;
+  }
+}
